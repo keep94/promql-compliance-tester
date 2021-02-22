@@ -14,6 +14,7 @@ type Config struct {
 	TestTargetConfig      TargetConfig  `yaml:"test_target_config"`
 	QueryTweaks           []*QueryTweak `yaml:"query_tweaks"`
 	TestCases             []*TestCase   `yaml:"test_cases"`
+	Start                 int64         `yaml:"start"`
 }
 
 // TargetConfig represents the configuration of a single Prometheus API endpoint.
