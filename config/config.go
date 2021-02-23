@@ -34,6 +34,12 @@ type QueryTweak struct {
 	AlignTimestampsToStep  bool              `yaml:"align_timestamps_to_step" json:"alignTimestampsToStep,omitempty"`
 	DropResultLabels       []model.LabelName `yaml:"drop_result_labels" json:"dropResultLabels,omitempty"`
 	IgnoreFirstStep        bool              `yaml:"ignore_first_step" json:"ignoreFirstStep,omitempty"`
+	FloatCompare           *FloatCompare     `yaml:"float_compare" json:"floatCompare,omitempty"`
+}
+
+type FloatCompare struct {
+	Fraction *float64 `yaml:"fraction" json:"fraction,omitempty"`
+	Margin   *float64 `yaml:"margin" json:"margin,omitempty"`
 }
 
 // TestCase represents a given query (pattern) to be tested.

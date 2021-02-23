@@ -15,6 +15,11 @@ import (
 	"github.com/promlabs/promql-compliance-tester/config"
 )
 
+const (
+	defaultFraction = 0.00001
+	defaultMargin   = 0.0
+)
+
 // PromAPI allows running instant and range queries against a Prometheus-compatible API.
 type PromAPI interface {
 	// Query performs a query for the given time.
@@ -35,9 +40,25 @@ type TestCase struct {
 
 // A Comparer allows comparing query results for test cases between a reference API and a test API.
 type Comparer struct {
-	RefAPI      PromAPI
-	TestAPI     PromAPI
-	QueryTweaks []*config.QueryTweak
+	refAPI         PromAPI
+	testAPI        PromAPI
+	queryTweaks    []*config.QueryTweak
+	compareOptions cmp.Options
+}
+
+// New returns a new Comparer.
+func New(refAPI, testAPI PromAPI, queryTweaks []*config.QueryTweak) *Comparer {
+	var options cmp.Options
+	addFloatCompareOptions(queryTweaks, &options)
+	addDropResultLabelsOptions(queryTweaks, &options)
+	queryTweaksCopy := make([]*config.QueryTweak, len(queryTweaks))
+	copy(queryTweaksCopy, queryTweaks)
+	return &Comparer{
+		refAPI:         refAPI,
+		testAPI:        testAPI,
+		queryTweaks:    queryTweaksCopy,
+		compareOptions: options,
+	}
 }
 
 // Result tracks a single test case's query comparison result.
@@ -66,8 +87,8 @@ func (c *Comparer) Compare(tc *TestCase) (*Result, error) {
 	}
 
 	// TODO: Handle warnings (second, ignored return value).
-	refResult, _, refErr := c.RefAPI.QueryRange(ctx, tc.Query, r)
-	testResult, _, testErr := c.TestAPI.QueryRange(ctx, tc.Query, r)
+	refResult, _, refErr := c.refAPI.QueryRange(ctx, tc.Query, r)
+	testResult, _, testErr := c.testAPI.QueryRange(ctx, tc.Query, r)
 
 	if (refErr != nil) != tc.ShouldFail {
 		if refErr != nil {
@@ -89,7 +110,7 @@ func (c *Comparer) Compare(tc *TestCase) (*Result, error) {
 
 	sort.Sort(testResult.(model.Matrix))
 
-	for _, qt := range c.QueryTweaks {
+	for _, qt := range c.queryTweaks {
 		if qt.IgnoreFirstStep {
 			for _, r := range refResult.(model.Matrix) {
 				if len(r.Values) > 0 && r.Values[0].Timestamp.Time().Sub(tc.Start) <= 2*time.Millisecond {
@@ -99,36 +120,54 @@ func (c *Comparer) Compare(tc *TestCase) (*Result, error) {
 		}
 	}
 
-	cmpOpts := cmp.Options{
+	return &Result{
+		TestCase: tc,
+		Diff:     cmp.Diff(refResult, testResult, c.compareOptions),
+	}, nil
+}
+
+func addFloatCompareOptions(queryTweaks []*config.QueryTweak, options *cmp.Options) {
+	fraction := defaultFraction
+	margin := defaultMargin
+	for _, rt := range queryTweaks {
+		if rt.FloatCompare != nil {
+			if rt.FloatCompare.Fraction != nil {
+				fraction = *rt.FloatCompare.Fraction
+			}
+			if rt.FloatCompare.Margin != nil {
+				margin = *rt.FloatCompare.Margin
+			}
+		}
+	}
+	*options = append(
+		*options,
 		// Translate sample values into float64 so that cmpopts.EquateApprox() works.
 		cmp.Transformer("TranslateFloat64", func(in model.SampleValue) float64 {
 			return float64(in)
 		}),
-		// Allow general comparison tolerances due to floating point unpredictability.
-		// cmpopts.EquateApprox(0.0000000000001, 0),
-		cmpopts.EquateApprox(0.00001, 0),
+		cmpopts.EquateApprox(fraction, margin),
 		// A NaN is usually not treated as equal to another NaN, but we want to treat it as such here.
 		cmpopts.EquateNaNs(),
-	}
+	)
+}
 
-	for _, rt := range c.QueryTweaks {
+func addDropResultLabelsOptions(queryTweaks []*config.QueryTweak, options *cmp.Options) {
+	for _, rt := range queryTweaks {
 		if len(rt.DropResultLabels) != 0 {
 			localRt := rt
-			cmpOpts = append(
-				cmpOpts,
-				cmp.Options{cmp.Transformer("DropResultLabels", func(in model.Metric) model.Metric {
-					m := in.Clone()
-					for _, ln := range localRt.DropResultLabels {
-						delete(m, ln)
-					}
-					return m
-				})},
+			*options = append(
+				*options,
+				cmp.Transformer(
+					"DropResultLabels",
+					func(in model.Metric) model.Metric {
+						m := in.Clone()
+						for _, ln := range localRt.DropResultLabels {
+							delete(m, ln)
+						}
+						return m
+					},
+				),
 			)
 		}
 	}
-
-	return &Result{
-		TestCase: tc,
-		Diff:     cmp.Diff(refResult, testResult, cmpOpts),
-	}, nil
 }
